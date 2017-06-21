@@ -1,0 +1,52 @@
+#!/usr/bin/env ruby
+
+require 'optparse'
+require 'aws-sdk'
+require 'json'
+require 'time'
+
+require 'cfn-events'
+
+config = CfnEvents::Config.new
+
+opts_parser = OptionParser.new do |opts|
+  opts.banner = "
+  cfn-events [OPTIONS] STACK-NAME-OR-ID
+  "
+  opts.separator "Controlling which events to select:"
+  opts.on("-r", "--region=s", "CloudFormation region"){|r| config.client_options = { region: r } }
+  opts.on("-s", "--since=s", "Don't show any events earlier than this time"){|s| config.since = Time.parse(s).to_time }
+  opts.separator ""
+  opts.separator "Controlling the output format:"
+  opts.on("-j", "--json", "Output events as json"){ config.output_json = true }
+  opts.separator ""
+  opts.separator "Controlling when to stop:"
+  opts.on("-w", "--wait", "Stop once the stack reaches a stable state"){ config.wait = true }
+  opts.on("-f", "--forever", "Keep showing events (until killed)"){ config.forever = true }
+  opts.on("-p", "--poll-interval=n", "Poll interval, in seconds"){|t| config.poll_seconds = t.to_f }
+  opts.separator <<-EOF
+
+If neither --wait nor --forever are used, then cfn-events exits once any
+currently-available events have been displayed (and --poll-interval has no
+effect).
+
+If --wait is used, then cfn-events keeps reading events (respecting the given
+--poll-interval) until the stack reaches a non-"IN_PROGRESS" state.  The exit
+status depends on what state the stack ends up in.  If it's a FAILED state,
+the exit status is 2; if it's a ROLLBACK state; the exit status is 1;
+otherwise, the exit status is 0.
+
+If --forever is used, then cfn-events keeps reading events until killed, or
+an error occurs.
+
+  EOF
+end
+opts_parser.parse!
+
+ARGV.count == 1 or raise "Usage: cfn-events [OPTIONS] STACK-NAME-OR-ID"
+config.stack_name_or_id = ARGV.first
+
+rc = CfnEvents::Runner.new(config).run
+exit rc
+
+# eof cfn-events
