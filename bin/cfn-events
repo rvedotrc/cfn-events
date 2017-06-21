@@ -43,7 +43,11 @@ an error occurs.
 end
 opts_parser.parse!
 
-ARGV.count == 1 or raise "Usage: cfn-events [OPTIONS] STACK-NAME-OR-ID"
+unless ARGV.count == 1
+  $stderr.puts "Usage: cfn-events [OPTIONS] STACK-NAME-OR-ID"
+  $stderr.puts "See 'cfn-events --help' for more"
+  exit 2
+end
 config.stack_name_or_id = ARGV.first
 
 rc = CfnEvents::Runner.new(config).run
