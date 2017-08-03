@@ -6,7 +6,7 @@ Gem::Specification.new do |s|
   s.name        = 'cfn-events'
   s.version     = CfnEvents::VERSION
   s.licenses    = [ 'Apache-2.0' ]
-  s.date        = '2015-07-19'
+  s.date        = '2017-08-03'
   s.summary     = 'Watch AWS CloudFormation stack events and wait for completion'
   s.description = '
     cfn-events reads the events for an AWS CloudFormation stack.  It can
