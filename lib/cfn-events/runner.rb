@@ -27,9 +27,9 @@ module CfnEvents
       @config.cfn_client.describe_stack_events(stack_name: @stack_id).data.stack_events.reverse
     end
 
-    def events_since_time(t)
+    def events_since_time(events, t)
       # There may be a more efficient algorithm
-      all_events.select {|e| e.timestamp > t }
+      events.select {|e| e.timestamp > t }
     end
 
     def events_since_id(id)
@@ -68,19 +68,15 @@ module CfnEvents
     def run
       @stack_id = resolve_stack(@config.stack_name_or_id)
 
-      events = if @config.since
-                 events_since_time(@config.since)
-               else
-                 all_events
-               end
+      events = all_events
 
-      show_events(events)
+      if @config.since
+        show_events(events_since_time(events, @config.since))
+      else
+        show_events(events)
+      end
 
       return 0 unless @config.forever or @config.wait
-
-      # I'm assuming / pretending that by this point, events.empty? is never true
-      # FIXME! It's false.  If --since was used, and there have been no events since
-      # that time.  That's a bug. :-(
 
       while @config.forever or not steady_state?(events.last)
         $stdout.sync
