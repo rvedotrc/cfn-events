@@ -1,3 +1,5 @@
+require 'json'
+
 module CfnEvents
 
   class Runner
@@ -11,36 +13,78 @@ module CfnEvents
                              end
     end
 
-    def core_v2_options
-      i
-    end
-
     def resolve_stack(stack_name_or_id)
-      ans = @config.cfn_client.describe_stacks(stack_name: stack_name_or_id).data.stacks[0].stack_id
+      ans = @config.cfn_client.describe_stacks(stack_name: stack_name_or_id).stacks[0].stack_id
       if ans != stack_name_or_id
         $stderr.puts "Resolved #{stack_name_or_id} to #{ans}"
       end
       ans
     end
 
-    def all_events
-      @config.cfn_client.describe_stack_events(stack_name: @stack_id).data.stack_events.reverse
-    end
+    def all_events_so_far
+      r = @config.cfn_client.describe_stack_events(stack_name: @stack_id)
+      events = r.each_page.flat_map {|page| page.stack_events}.reverse
 
-    def events_since_time(events, t)
-      # There may be a more efficient algorithm
-      events.select {|e| e.timestamp > t }
-    end
-
-    def events_since_id(id)
-      # There may be a more efficient algorithm
-      events = all_events
-      i = events.index {|e| e.event_id == id }
-      if i < 0
-        events
-      else
-        events[i+1..-1]
+      if events.empty?
+        raise "Stack has no events! Please raise this as a cfn-events bug."
       end
+
+      [ events, events.last ]
+    end
+
+    def events_since_time(t)
+      r = @config.cfn_client.describe_stack_events(stack_name: @stack_id)
+
+      # If there are no events since the given time, show none, and return the
+      # most recent event.  Sort of an edge case.
+      if r.stack_events.first.timestamp <= t
+        return [ [], r.stack_events.first ]
+      end
+
+      events = []
+      loop do
+        cutoff = r.stack_events.index {|event| event.timestamp <= t}
+        if cutoff
+          # We can stop looking
+          events.concat r.stack_events[0..cutoff-1]
+          events.reverse!
+          return [ events, events.last ]
+        end
+
+        events.concat r.stack_events
+        r.next_page? or break
+        r = r.next_page
+      end
+
+      # ALL the available events are since the given time
+      events.reverse!
+      return [ events, events.last ]
+    end
+
+    def events_since_event(since_event)
+      r = @config.cfn_client.describe_stack_events(stack_name: @stack_id)
+
+      # Sort of a special case: no new events
+      if r.stack_events.first.event_id == since_event.event_id
+        return [ [], since_event ]
+      end
+
+      events = []
+      r.each_page do |page|
+        cutoff = page.stack_events.index {|e| e.event_id == since_event.event_id}
+
+        if cutoff
+          events.concat page.stack_events[0..cutoff-1]
+          return [ events.reverse, events.first ]
+        end
+
+        events.concat r.stack_events
+      end
+
+      # Unable to join what we've seen so far to what we can see now
+      $stderr.puts "Last-seen stack event is no longer returned by AWS. Please raise this as a cfn-events bug."
+
+      return [ events.reverse, events.first ]
     end
 
     def show_events(events)
@@ -68,30 +112,33 @@ module CfnEvents
     def run
       @stack_id = resolve_stack(@config.stack_name_or_id)
 
-      events = all_events
+      # An assumption to make the logic easier:
+      # - there can never be zero events
 
-      if @config.since
-        show_events(events_since_time(events, @config.since))
-      else
-        show_events(events)
-      end
+      # (The closest we seem to get to this is if a stack is created via a
+      # change set, then the stack entity is created with a single event,
+      # "AWS::CloudFormation::Stack <the stack name> REVIEW_IN_PROGRESS").
+
+      # Therefore there is always a most_recent_event.
+
+      events_to_show, most_recent_event = if @config.since
+                                            events_since_time @config.since
+                                          else
+                                            all_events_so_far
+                                          end
+      show_events events_to_show
 
       return 0 unless @config.forever or @config.wait
 
-      while @config.forever or not steady_state?(events.last)
+      while @config.forever or not steady_state?(most_recent_event)
         $stdout.sync
         sleep @config.poll_seconds
-
-        new_events = events_since_id(events.last.event_id)
-
-        unless new_events.empty?
-          show_events(new_events)
-          events = new_events
-        end
+        events_to_show, most_recent_event = events_since_event most_recent_event
+        show_events events_to_show
       end
 
-      return 2 if events.last.resource_status.match /FAILED/
-      return 1 if events.last.resource_status.match /ROLLBACK/
+      return 2 if most_recent_event.resource_status.match /FAILED/
+      return 1 if most_recent_event.resource_status.match /ROLLBACK/
       return 0
     end
 
